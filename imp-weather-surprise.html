@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>12-D Imp Weather</title>
+<style>
+  body{margin:0;background:#000;color:#0f0;font-family:monospace;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh}
+  canvas{width:100%;max-width:600px;height:300px}
+  #poem{margin-top:1rem;height:4rem;font-size:1.2rem;text-align:center}
+  #forecast{margin-top:.5rem;font-size:1.5rem;color:#6ff}
+  input,button{padding:.5rem;font-size:1rem}
+  button{cursor:pointer;background:#0f0;color:#000;border:0;border-radius:4px}
+  button:hover{background:#6ff}
+</style>
+<canvas id="cv"></canvas>
+<div id="poem">Connecting to the 12th dimension…</div>
+<div id="forecast"></div>
+<input id="loc" placeholder="City or lat,lon">
+<button onclick="go()">Summon Imp</button>
+
+<script type="module">
+/* 0. Chaos kit */
+const personas = [
+  {name:'haiku imp', prompt:'Reply in 5-7-5 haiku. Final line must be exactly these 6 words:'},
+  {name:'pirate imp', prompt:'Talk like a swashbuckling pirate. End with exactly these 6 words:'},
+  {name:'1337 h4x0r', prompt:'Speak in elite 1337 sp34k. Final line must be exactly these 6 words:'},
+  {name:'mischievous 12-D imp', prompt:'Rhyme in trochaic tetrameter. Final line must be exactly these 6 words:'}
+];
+const pick = personas[Math.floor(Math.random()*personas.length)];
+console.log('%c🧠 Hidden poem mode: '+pick.name,'color:#0f0;font-size:1.3em');
+
+/* 1. WebGPU live imp shader (zero cost) */
+const adapter = await navigator.gpu?.requestAdapter();
+const device = await adapter?.requestDevice();
+const canvas = document.getElementById('cv');
+const ctx = canvas.getContext('webgpu');
+if (ctx) {
+  canvas.width = canvas.clientWidth;
+  canvas.height = canvas.clientHeight;
+  const format = navigator.gpu.getPreferredCanvasFormat();
+  ctx.configure({device, format});
+  const code = `
+    @group(0) @binding(0) var<uniform> t: f32;
+    @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+      const p = array(vec2f(-1,1), vec2f(-1,-3), vec2f(3,1));
+      return vec4f(p[i],0,1);
+    }
+    @fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
+      let uv = (p.xy/__dims__) * 2.0 - 1.0;
+      let d = length(uv) - 0.3*sin(t+length(uv)*10.0);
+      let col = 0.01 / abs(d) * vec3f(0.2,1,0.5);
+      return vec4f(col,1);
+    }`.replace('__dims__', `${canvas.width}.0/${canvas.height}.0`);
+  const module = device.createShaderModule({code});
+  const pipeline = device.createRenderPipeline({
+    layout:'auto', vertex:{module, entryPoint:'vs'},
+    fragment:{module, entryPoint:'fs', targets:[{format}]}
+  });
+  const uniformBuf = device.createBuffer({size:4, usage:GPUBufferUsage.UNIFORM|GPUBufferUsage.COPY_DST});
+  const bindGroup = device.createBindGroup({layout:pipeline.getBindGroupLayout(0), entries:[{binding:0, resource:{buffer:uniformBuf}}]});
+  let start = performance.now();
+  requestAnimationFrame(function frame() {
+    const t = (performance.now() - start)/1000;
+    device.queue.writeBuffer(uniformBuf, 0, new Float32Array([t]));
+    const enc = device.createCommandEncoder();
+    const pass = enc.beginRenderPass({colorAttachments:[{view:ctx.getCurrentTexture().createView(), loadOp:'clear', storeOp:'store'}]});
+    pass.setPipeline(pipeline); pass.setBindGroup(0, bindGroup); pass.draw(3); pass.end();
+    device.queue.submit([enc.finish()]);
+    requestAnimationFrame(frame);
+  });
+} else {
+  document.getElementById('poem').textContent = 'WebGPU not found—imp is invisible, but poem still coming…';
+}
+
+/* 2. Free poem + forecast */
+async function go() {
+  const poemEl = document.getElementById('poem');
+  const foreEl = document.getElementById('forecast');
+  poemEl.textContent = 'Summoning imp…';
+  foreEl.textContent = '';
+  let loc = document.getElementById('loc').value.trim() || 'auto';
+  
+  /* 2a. Geocode free */
+  let lat, lon;
+  if (loc === 'auto') {
+    const pos = await new Promise((res,rej) => navigator.geolocation.getCurrentPosition(res,rej));
+    lat = pos.coords.latitude; lon = pos.coords.longitude;
+  } else if (loc.includes(',')) {
+    [lat,lon] = loc.split(',').map(Number);
+  } else {
+    const geo = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(loc)}&count=1`)
+                  .then(r=>r.json()).catch(()=>({results:[]}));
+    if (!geo.results?.length) { poemEl.textContent = 'Location not found'; return; }
+    lat = geo.results[0].latitude; lon = geo.results[0].longitude;
+  }
+
+  /* 2b. Weather in 6 words free */
+  const w = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`)
+               .then(r=>r.json()).catch(()=>({}));
+  const desc = w.current_weather ? `${Math.round(w.current_weather.temperature)}°C ${w.current_weather.windspeed}km/h wind` : 'Weather unknown';
+
+  /* 2c. Free poem via Cloudflare Workers AI (no key needed) */
+  const prompt = `You are a ${pick.name} who ${pick.prompt} "${desc}"`;
+  const poem = await fetch('https://api.cloudflare.com/client/v4/ai/run/@cf/meta/llama-3-8b-instruct', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({messages:[{role:'user',content:prompt}],stream:false})
+  }).then(r=>r.json()).then(j=>j.result?.response||'Imp got shy…');
+
+  poemEl.textContent = poem.replace(desc,'').trim();
+  foreEl.textContent = desc;
+  console.log('%c🪄 Hidden console poem:\n'+poem,'color:#6ff');
+}
+window.go = go;
+</script>
+</html>
